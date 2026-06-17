@@ -1,4 +1,5 @@
 import { pool } from './db';
+import { logger } from './logger';
 
 const MIGRATIONS_TABLE = '_migrations';
 
@@ -54,16 +55,16 @@ export async function runMigrations(): Promise<void> {
         continue;
       }
 
-      console.log(`Applying migration: ${migration.name}`);
+      logger.info({ migration: migration.name }, 'Applying migration');
       await client.query(migration.sql);
       await client.query(
         `INSERT INTO ${MIGRATIONS_TABLE} (name) VALUES ($1)`,
         [migration.name],
       );
-      console.log(`Migration ${migration.name} applied`);
+      logger.info({ migration: migration.name }, 'Migration applied');
     }
 
-    console.log('All migrations up to date');
+    logger.info('All migrations up to date');
   } finally {
     client.release();
   }

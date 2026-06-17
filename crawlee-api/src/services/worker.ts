@@ -1,6 +1,8 @@
 import { Worker, QueueBaseOptions } from 'bullmq';
-import { ScrapeJobData, scrapeQueue } from './queue';
+import { ScrapeJobData } from './queue';
 import { scrapeUrl, ProxyUnreachableError } from './scraper';
+import { pool } from './db';
+import { logger } from './logger';
 
 const connection: QueueBaseOptions['connection'] = {
   host: process.env.REDIS_HOST || '127.0.0.1',
@@ -10,7 +12,7 @@ const connection: QueueBaseOptions['connection'] = {
 const concurrency = parseInt(process.env.MAX_CONCURRENCY || '3', 10);
 const maxWebhookRetries = 3;
 
-function categorizeError(err: unknown): { statusCode: number; message: string } {
+export function categorizeError(err: unknown): { statusCode: number; message: string } {
   if (err instanceof ProxyUnreachableError) {
     return { statusCode: 502, message: err.message };
   }
@@ -26,12 +28,9 @@ function categorizeError(err: unknown): { statusCode: number; message: string } 
 
 function checkWebhookScheme(url: string): void {
   if (url.startsWith('http://')) {
-    console.warn(
-      `⚠  Webhook URL uses unencrypted HTTP: ${url}. ` +
-      'Payloads will be sent in plain text. Use HTTPS in production.',
-    );
+    logger.warn({ webhookUrl: url }, 'Webhook URL uses unencrypted HTTP — payload will be sent in plain text');
   } else if (!url.startsWith('https://')) {
-    console.warn(`⚠  Webhook URL has unrecognized scheme: ${url}`);
+    logger.warn({ webhookUrl: url }, 'Webhook URL has unrecognized scheme');
   }
 }
 
@@ -55,18 +54,18 @@ async function deliverWebhook(
       lastErr = err instanceof Error ? err : new Error(String(err));
       if (attempt < maxWebhookRetries) {
         const delay = Math.min(1000 * 2 ** attempt, 15_000);
-        console.warn(
-          `Webhook delivery attempt ${attempt}/${maxWebhookRetries} failed for ${webhookUrl}. ` +
-          `Retrying in ${delay}ms... Error: ${lastErr.message}`,
+        logger.warn(
+          { webhookUrl, attempt, maxWebhookRetries, delay, err: lastErr.message },
+          'Webhook delivery failed, retrying',
         );
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  console.error(
-    `⚠  DEAD LETTER — Webhook permanently failed after ${maxWebhookRetries} attempts: ${webhookUrl}. ` +
-    `Last error: ${lastErr!.message}. The scrape result is stored in the database but was NOT delivered.`,
+  logger.error(
+    { webhookUrl, lastError: lastErr!.message },
+    'DEAD LETTER — Webhook permanently failed after all retries',
   );
 }
 
@@ -75,15 +74,28 @@ export function createWorker(): Worker {
     'scrape-queue',
     async (job) => {
       const { url, selectors, webhookUrl, userId } = job.data;
-      console.log(`Worker processing job ${job.id} (user ${userId}): ${url}`);
+      logger.info({ jobId: job.id, userId, url }, 'Worker processing job');
 
       const result = await scrapeUrl(url, selectors);
 
+      await pool.query(
+        `INSERT INTO scraped_pages (user_id, url, title, markdown, raw_html, word_count, processed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        [
+          userId,
+          result.url,
+          result.title,
+          result.markdown,
+          result.rawHtml,
+          result.markdown ? result.markdown.split(/\s+/).length : 0,
+        ],
+      );
+
       if (webhookUrl) {
-        console.log(`Delivering result to webhook: ${webhookUrl}`);
         await deliverWebhook(webhookUrl, { success: true, userId, ...result });
       }
 
+      logger.info({ jobId: job.id, userId, url }, 'Job completed');
       return { ...result, userId };
     },
     {
@@ -97,12 +109,16 @@ export function createWorker(): Worker {
     if (!job) return;
     const { webhookUrl, url, userId } = job.data;
     const { statusCode, message } = categorizeError(err);
-    console.error(`Job ${job.id} (${url}, user ${userId}) failed [${statusCode}]:`, message);
+
+    logger.error(
+      { jobId: job.id, userId, url, statusCode, err: message },
+      'Job failed',
+    );
 
     if (job.attemptsMade >= (job.opts?.attempts || 3)) {
-      console.error(
-        `⚠  DEAD LETTER — Job ${job.id} (${url}) exhausted all ${job.attemptsMade} retries. ` +
-        `No further attempts will be made.`,
+      logger.error(
+        { jobId: job.id, url, attempts: job.attemptsMade },
+        'DEAD LETTER — Job exhausted all retries',
       );
     }
 
@@ -118,14 +134,10 @@ export function createWorker(): Worker {
   });
 
   worker.on('completed', (job) => {
-    console.log(`Job ${job.id} completed successfully`);
+    logger.info({ jobId: job.id }, 'Job completed successfully');
   });
 
-  process.on('SIGTERM', async () => {
-    await worker.close();
-  });
-
-  console.log(`BullMQ Worker started (concurrency=${concurrency})`);
+  logger.info({ concurrency }, 'BullMQ Worker started');
 
   return worker;
 }

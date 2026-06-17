@@ -1,4 +1,4 @@
-import { PlaywrightCrawler, Dataset, ProxyConfiguration } from 'crawlee';
+import { PlaywrightCrawler, ProxyConfiguration } from 'crawlee';
 import TurndownService from 'turndown';
 
 const turndownService = new TurndownService({
@@ -20,6 +20,13 @@ export class ProxyUnreachableError extends Error {
   }
 }
 
+export class ScrapeFailedError extends Error {
+  constructor(url: string, reason: string) {
+    super(`Failed to scrape ${url}: ${reason}`);
+    this.name = 'ScrapeFailedError';
+  }
+}
+
 function sanitizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!/^https?:\/\//i.test(trimmed)) {
@@ -29,6 +36,8 @@ function sanitizeUrl(input: string): string {
 }
 
 async function testProxyConnection(proxyUrl: string): Promise<void> {
+  if (!proxyUrl) return;
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
@@ -42,7 +51,6 @@ async function testProxyConnection(proxyUrl: string): Promise<void> {
       throw new Error(`HTTP ${response.status}`);
     }
   } catch {
-    // Proxy test failed — throw a structured error
     clearTimeout(timeout);
     throw new ProxyUnreachableError(proxyUrl);
   } finally {
@@ -56,10 +64,12 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
 
   await testProxyConnection(proxyUrl);
 
+  let capturedResult: ScrapeResult | null = null;
+
   const crawler = new PlaywrightCrawler({
-    proxyConfiguration: new ProxyConfiguration({
-      proxyUrls: [proxyUrl],
-    }),
+    proxyConfiguration: proxyUrl
+      ? new ProxyConfiguration({ proxyUrls: [proxyUrl] })
+      : undefined,
     launchContext: {
       launchOptions: {
         headless: true,
@@ -91,10 +101,10 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
         await ctx.page.close();
       },
     ],
-    failedRequestHandler: async ({ request, log }) => {
-      log.warning(`Request failed after ${request.retryCount} retries: ${request.url}`);
-      throw new Error(
-        `Failed to scrape ${request.url} after ${request.retryCount} retries`,
+    failedRequestHandler: async ({ request }) => {
+      throw new ScrapeFailedError(
+        request.url,
+        `failed after ${request.retryCount} retries`,
       );
     },
     requestHandler: async (ctx) => {
@@ -126,12 +136,12 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
 
       const markdown = turndownService.turndown(rawHtml);
 
-      await Dataset.pushData({
+      capturedResult = {
         url: request.loadedUrl || sanitizedUrl,
         title,
         rawHtml,
         markdown,
-      });
+      };
     },
   });
 
@@ -141,19 +151,9 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
     await crawler.teardown();
   }
 
-  const dataset = await Dataset.open();
-  const { items } = await dataset.getData();
-
-  if (!items || items.length === 0) {
-    throw new Error('No data scraped from the URL');
+  if (!capturedResult) {
+    throw new ScrapeFailedError(sanitizedUrl, 'no data returned from request handler');
   }
 
-  const item = items[0] as unknown as ScrapeResult;
-
-  return {
-    url: item.url || sanitizedUrl,
-    title: item.title || '',
-    rawHtml: item.rawHtml || '',
-    markdown: item.markdown || '',
-  };
+  return capturedResult;
 }

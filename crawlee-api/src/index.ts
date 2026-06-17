@@ -7,6 +7,7 @@ import { adminRouter } from './routes/admin';
 import { authMiddleware, AuthenticatedRequest } from './middleware/auth';
 import { createWorker } from './services/worker';
 import { runMigrations } from './services/migrate';
+import { logger } from './services/logger';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -54,22 +55,22 @@ app.use('/api', scrapeRouter);
 app.use('/admin', adminRouter);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error('Unhandled error:', err.message);
+  logger.error({ err: err.message }, 'Unhandled error');
   res.status(500).json({ error: 'Internal server error' });
 });
 
 runMigrations()
-  .then(() => console.log('Migrations complete'))
-  .catch((err) => console.error('Migration failed:', err));
+  .then(() => logger.info('Migrations complete'))
+  .catch((err) => logger.error({ err }, 'Migration failed'));
 
 const worker = createWorker();
 
 app.listen(PORT, () => {
-  console.log(`Crawlee API listening on port ${PORT}`);
+  logger.info({ port: PORT }, 'Crawlee API listening');
 });
 
 process.on('SIGTERM', async () => {
-  console.log('Shutting down...');
+  logger.info('Shutting down...');
   await worker.close();
   process.exit(0);
 });

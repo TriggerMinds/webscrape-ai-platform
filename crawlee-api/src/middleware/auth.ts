@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { lookupApiKey } from '../services/db';
+import { logger } from '../services/logger';
 
 export interface AuthenticatedRequest extends Request {
   userId?: string;
@@ -17,10 +18,7 @@ function checkBruteForce(ip: string): boolean {
   }
 
   entry.count++;
-  if (entry.count > 5) {
-    return true;
-  }
-  return false;
+  return entry.count > 5;
 }
 
 function resetBruteForce(ip: string): void {
@@ -37,7 +35,7 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
   }
 
   if (checkBruteForce(clientIp)) {
-    console.warn(`Brute-force blocked for IP ${clientIp}`);
+    logger.warn({ clientIp }, 'Brute-force blocked');
     res.status(429).json({ error: 'Too many failed authentication attempts. Try again later.' });
     return;
   }
@@ -52,7 +50,7 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
     req.userId = keyData.userId;
     next();
   } catch (err) {
-    console.error('Auth lookup error:', err);
+    logger.error({ err }, 'Auth lookup error');
     res.status(500).json({ error: 'Authentication service unavailable' });
   }
 }
