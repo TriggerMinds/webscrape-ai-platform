@@ -1,198 +1,85 @@
-# WebScrape AI Platform
+<p align="center">
+  <h1 align="center">WebScrape AI Platform</h1>
+  <p align="center"><strong>The Open-Source Alternative to Firecrawl, Octoparse & Gumloop</strong></p>
+  <p align="center">
+    <a href="#"><img src="https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white" alt="Docker"></a>
+    <a href="#"><img src="https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white" alt="TypeScript"></a>
+    <a href="#"><img src="https://img.shields.io/badge/n8n-14161A?style=flat&logo=n8n&logoColor=EA4AAA" alt="n8n"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Playwright-45ba4b?style=flat&logo=playwright&logoColor=white" alt="Playwright"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis&logoColor=white" alt="Redis"></a>
+    <a href="#"><img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white" alt="PostgreSQL"></a>
+    <a href="#"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License MIT"></a>
+  </p>
+</p>
 
-A self-hosted, production-ready, **multi-tenant** AI web scraping and orchestration platform that replaces **Firecrawl**, **Octoparse**, and **Gumloop**. Built with **n8n**, **Crawlee/Playwright**, **Turndown**, **Redis** (BullMQ), and **PostgreSQL** (pgvector).
+---
 
-## Architecture
-
-```
-┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   Browser    │────▶│  Crawlee API     │◀────│   n8n            │
-│  (Playwright)│     │  :3001           │     │  :5678           │
-└──────┬───────┘     └───────┬──────────┘     └───────┬──────────┘
-       │                     │     ▲                   │
-       │ SOCKS5 Proxy        │  (queue)│               │ Async callback
-       ▼                     ▼     │                   ▼
-┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
-│  Hysteria    │     │    Redis     │     │  BullMQ Worker   │
-│  127.0.0.1   │     │   :6379     │     │  (max 3 conc.)   │
-│  :1080       │     │             │     │                  │
-└──────────────┘     └──────────────┘     └────────┬─────────┘
-                           ▲                        │
-                           │                        ▼
-                     ┌─────┴─────┐          ┌──────────────────┐
-                     │ PostgreSQL│◀─────────│   Turndown       │
-                     │  :5432    │          │   HTML → MD      │
-                     │           │          └──────────────────┘
-                     │ api_keys  │
-                     │ scraped   │
-                     │ _pages    │
-                     └───────────┘
-```
+A self-hosted, multi-tenant AI web scraping and orchestration platform that replaces **Firecrawl**, **Octoparse**, and **Gumloop** — without the per-page pricing. Built with **n8n**, **Crawlee/Playwright**, **Turndown**, **BullMQ** (Redis), and **PostgreSQL** (pgvector).
 
 ## Features
 
-- **Multi-Tenant** — API key authentication, per-user data isolation, per-user rate limiting (10 req/min)
-- **Resilient Headless Scraping** — Crawlee/Playwright with anti-bot stealth, JS rendering, network idle waiting, and automatic retries (3 attempts)
-- **LLM-Ready Markdown** — HTML auto-converted to clean Markdown via Turndown
-- **AI Orchestration** — n8n with Advanced AI / LangChain nodes for summarization, extraction, and data pipelines
-- **Async Queue Architecture** — BullMQ + Redis prevents browser overload; max 3 concurrent Chromium instances
-- **Webhook Callbacks** — Scrape results are POSTed back when ready
-- **SOCKS5 Proxy** — All Playwright traffic routes through a configurable proxy (default `socks5://127.0.0.1:1080`)
-- **Dockerized** — Single `docker-compose up` to run the entire stack
+| Capability | Details |
+|---|---|
+| **🤖 Playwright Stealth Crawling** | Anti-bot fingerprinting, JS rendering, `networkidle` waits, automatic retries (×3) |
+| **📝 LLM-Ready Markdown** | Raw HTML → clean Markdown via Turndown — feed directly into GPT, Claude, LangChain |
+| **⚡ Async Queue Architecture** | BullMQ + Redis prevents Chromium OOM crashes; max N concurrent browsers (configurable) |
+| **🔑 Multi-Tenant API** | Per-user API keys, data isolation (`user_id` on every row), per-user rate limits (10 req/min) |
+| **🔗 Webhook Callbacks** | Submit a URL, get a `jobId` back immediately — result arrives at your webhook when ready |
+| **🕵️ SOCKS5 Proxy Support** | Route all Playwright traffic through a stealth proxy (Hysteria-compatible) |
+| **🧩 n8n Integration** | Importable workflow: trigger scrape → AI extract → PostgreSQL storage |
+| **🐳 One-Command Deploy** | `docker compose up -d` — n8n + PostgreSQL + Redis + Crawlee API |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[User / n8n] -->|POST /api/scrape| API[Express API :3001]
+    API -->|x-api-key validation| PG[(PostgreSQL<br/>api_keys)]
+    API -->|Enqueue job| RQ[Redis<br/>BullMQ Queue]
+    RQ -->|Dequeue| WK[BullMQ Worker<br/>concurrency: N]
+    WK -->|Launch| PW[Playwright<br/>Chromium]
+    PW -->|socks5://| PR[Stealth Proxy<br/>127.0.0.1:1080]
+    PW -->|HTML| TD[Turndown<br/>HTML → Markdown]
+    TD -->|Result| WK
+    WK -->|POST callback| WH[Webhook URL]
+    WK -->|Store| PG2[(PostgreSQL<br/>scraped_pages)]
+```
+
+**Data flow:**
+1. Client sends a URL (+ API key) → Express queues the job in Redis
+2. BullMQ worker (max N concurrent) picks up the job
+3. Playwright launches headless Chromium, waits for JS render, extracts HTML
+4. Turndown converts HTML to clean Markdown
+5. Result is POSTed to your webhook (if provided) and stored in PostgreSQL
 
 ## Quick Start
 
 ### Prerequisites
 
-- Docker & Docker Compose v2
+- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose v2](https://docs.docker.com/compose/install/)
 - Git
 
-### 1. Start the system
+### 1. Clone
 
 ```bash
-docker compose up -d
+git clone https://github.com/TriggerMinds/webscrape-ai-platform.git
+cd webscrape-ai-platform
 ```
 
-This starts four services:
-
-| Service | Port | Description |
-|---------|------|-------------|
-| **n8n** | `5678` | Workflow orchestrator with AI/LangChain nodes |
-| **Crawlee API** | `3001` | Headless scraping microservice (BullMQ worker) |
-| **Redis** | `6379` | Job queue for decoupled scraping |
-| **PostgreSQL** | `5432` | Database with pgvector + api_keys + scraped_pages |
-
-### 2. Create an API key
-
-The first time the Crawlee API starts, it auto-creates the database tables. To add an API key, run this SQL against PostgreSQL:
-
-```bash
-docker compose exec postgres psql -U n8n -d n8n -c "
-INSERT INTO api_keys (key_value, user_id, name)
-VALUES ('wsp_demo_key_123', 'user_demo', 'Demo User')
-ON CONFLICT (key_value) DO NOTHING;
-"
-```
-
-Or connect with any PostgreSQL client and insert a row into the `api_keys` table:
-
-| Column | Value |
-|--------|-------|
-| `key_value` | Your API key (e.g. `wsp_abc123`) |
-| `user_id` | Unique user identifier (e.g. `user_42`) |
-| `name` | Human-readable name |
-| `is_active` | `true` (set to `false` to disable) |
-
-### 3. Configure n8n
-
-1. Open `http://localhost:5678` in your browser
-2. Complete the n8n setup wizard (create an account)
-3. Set the `N8N_ENCRYPTION_KEY` environment variable in your `.env` file
-
-### 4. Import the n8n workflow
-
-1. In n8n, go to **Workflows** → **Add Workflow** → **Import from File**
-2. Select `n8n-workflows/scrape-and-extract.json`
-3. The workflow has two independent trigger paths:
-
-**Part 1 — Queue trigger** (Webhook `/webhook/scrape-start`):
-- Receives `{ "url": "...", "apiKey": "..." }`
-- Calls the Crawlee API with the API key in the `x-api-key` header
-- Passes a `webhookUrl` pointing back to n8n
-- Returns immediately (HTTP 202)
-
-**Part 2 — Result handler** (Webhook `/webhook/scrape-result`):
-- Called by the Crawlee worker when scraping completes
-- Receives `{ userId, url, title, markdown, ... }`
-- **AI Extract (Mock)** — Generates summary and word count (replace with OpenAI/LangChain)
-- **Store in PostgreSQL** — Inserts into `scraped_pages` (scoped by `user_id`)
-- **Initialize DB Schema** — Run once to create all tables
-
-4. Click **Save**, then **Active** to enable the workflow
-
-### 5. Test the scraping API
-
-```bash
-curl -X POST http://localhost:3001/api/scrape \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: wsp_demo_key_123" \
-  -d '{"url": "https://example.com"}'
-```
-
-Response (202 Accepted):
-
-```json
-{
-  "jobId": "abc123",
-  "status": "queued",
-  "userId": "user_demo",
-  "message": "Scrape job enqueued for https://example.com"
-}
-```
-
-### 6. Trigger the n8n workflow
-
-```bash
-curl -X POST http://localhost:5678/webhook/scrape-start \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "apiKey": "wsp_demo_key_123"}'
-```
-
-The workflow will:
-1. Enqueue the scrape job in BullMQ (with API key in header)
-2. Return 202 immediately
-3. The worker (max 3 concurrent) processes the URL
-4. On completion, results are POSTed to n8n's `/webhook/scrape-result`
-5. n8n runs AI extraction and stores in PostgreSQL (scoped to your user)
-
-## Multi-Tenant Administration
-
-### Creating API keys
-
-As a community administrator, generate unique API keys for each user:
-
-```sql
--- Using docker compose exec:
-docker compose exec postgres psql -U n8n -d n8n -c "
-INSERT INTO api_keys (key_value, user_id, name)
-VALUES ('wsp_' || substr(md5(random()::text), 1, 16), 'user_2', 'Alice');
-"
-```
-
-The `api_keys` table:
-
-| Column | Description |
-|--------|-------------|
-| `key_value` | The API key sent in the `x-api-key` header |
-| `user_id` | Internal user identifier for data isolation |
-| `name` | Display name for admin reference |
-| `is_active` | Set to `false` to revoke access |
-
-### Data isolation
-
-Every row in `scraped_pages` is tagged with `user_id`. The Crawlee worker includes `userId` in webhook callbacks. The n8n workflow stores this value alongside each record. Queries must always filter by `user_id` to prevent cross-tenant data leaks.
-
-### Disabling a user
-
-```sql
-UPDATE api_keys SET is_active = false WHERE user_id = 'user_2';
-```
-
-## Environment Variables
+### 2. Configure environment
 
 Create a `.env` file in the project root:
 
-```env
-# Database
+```bash
+cat > .env << 'EOF'
+# PostgreSQL
 DB_USER=n8n
 DB_PASSWORD=n8n_password
 DB_NAME=n8n
-DB_PORT=5432
 
 # n8n
-N8N_PORT=5678
+N8N_ENCRYPTION_KEY=change-me-to-a-random-32-char-string
 N8N_WEBHOOK_URL=http://localhost:5678/
-N8N_ENCRYPTION_KEY=your-random-32-char-key-here
 
 # Crawlee API
 CRAWLEE_PORT=3001
@@ -202,67 +89,45 @@ PROXY_URL=socks5://127.0.0.1:1080
 REDIS_HOST=redis
 REDIS_PORT=6379
 MAX_CONCURRENCY=3
+EOF
 ```
 
-**Service hostnames inside Docker**: `postgres`, `redis`, `crawlee-api`. For local development, use `127.0.0.1` for all.
-
-## Project Structure
-
-```
-├── docker-compose.yml             # Stack orchestration (4 services)
-├── .env
-├── AGENTS.md
-├── crawlee-api/
-│   ├── Dockerfile
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── index.ts               # Express + auth middleware + worker
-│       ├── middleware/
-│       │   └── auth.ts            # x-api-key validation → req.userId
-│       ├── routes/
-│       │   └── scrape.ts          # POST /api/scrape (auth required)
-│       └── services/
-│           ├── db.ts              # PostgreSQL pool + schema + key lookup
-│           ├── queue.ts           # BullMQ queue (scrape-queue)
-│           ├── worker.ts          # BullMQ worker (concurrency-limited)
-│           └── scraper.ts         # PlaywrightCrawler + Turndown
-├── n8n-workflows/
-│   └── scrape-and-extract.json    # Async multi-tenant workflow
-└── README.md
-```
-
-## Development
+### 3. Start the stack
 
 ```bash
-cd crawlee-api
-npm install
-npm run dev        # Hot-reload with tsx watch
-npm run build      # Compile TypeScript
-npm run lint       # ESLint check
-npm run typecheck  # TypeScript type check
+docker compose up -d --build
 ```
 
-## API Reference
+This launches four services:
 
-### `POST /api/scrape`
+| Service | Port | Purpose |
+|---|---|---|
+| **n8n** | `5678` | Workflow orchestrator with AI/LangChain nodes |
+| **Crawlee API** | `3001` | Scraping microservice (Express + BullMQ worker) |
+| **Redis** | `6379` | Job queue broker |
+| **PostgreSQL** | `5432` | Database with pgvector |
 
-**Headers:**
+### 4. Create your first API key
 
-| Header | Required | Description |
-|--------|----------|-------------|
-| `x-api-key` | Yes | API key from the `api_keys` table |
-| `Content-Type` | Yes | `application/json` |
+```bash
+docker compose exec postgres psql -U n8n -d n8n -c "
+INSERT INTO api_keys (key_value, user_id, name)
+VALUES ('wsp_' || substr(md5(random()::text), 1, 16), 'user_demo', 'Demo User');
+"
+```
 
-**Request body:**
+Copy the key from the output — you'll need it for every API call.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `url` | `string` | Yes | The URL to scrape |
-| `selectors` | `string[]` | No | Optional CSS selectors |
-| `webhookUrl` | `string` | No | URL to POST result to when done |
+### 5. Submit a scrape job
 
-**Response (202):**
+```bash
+curl -X POST http://localhost:3001/api/scrape \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <your-api-key>" \
+  -d '{"url": "https://example.com"}'
+```
+
+You'll receive a `202 Accepted` with a `jobId`:
 
 ```json
 {
@@ -273,7 +138,21 @@ npm run typecheck  # TypeScript type check
 }
 ```
 
-**Webhook callback payload (success):**
+### 6. (Optional) Receive results via webhook
+
+Submit with a `webhookUrl` and the result will be POSTed there when ready:
+
+```bash
+curl -X POST http://localhost:3001/api/scrape \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: <your-api-key>" \
+  -d '{
+    "url": "https://example.com",
+    "webhookUrl": "https://my-server.com/callback"
+  }'
+```
+
+Callback payload (success):
 
 ```json
 {
@@ -286,11 +165,105 @@ npm run typecheck  # TypeScript type check
 }
 ```
 
+## n8n Integration
+
+The platform ships with a ready-to-import n8n workflow that demonstrates the full async pipeline.
+
+### Import the workflow
+
+1. Open `http://localhost:5678` in your browser
+2. Complete the n8n setup wizard
+3. Go to **Workflows** → **Add Workflow** → **Import from File**
+4. Select `n8n-workflows/scrape-and-extract.json`
+5. Click **Save**, then toggle **Active** to enable
+
+### Workflow structure
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Part 1 — Queue Trigger (/webhook/scrape-start)              │
+│                                                             │
+│  [Webhook] ──▶ [Queue Scrape Job] ──▶ (HTTP 202 to caller) │
+│                   │                                         │
+│                   │ POST /api/scrape + x-api-key header     │
+│                   ▼                                         │
+│              Crawlee API                                     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ Part 2 — Result Handler (/webhook/scrape-result)            │
+│                                                             │
+│  [Webhook] ◀── (Crawlee worker POSTs result here)           │
+│      │                                                      │
+│      ▼                                                      │
+│  [AI Extract (Mock)] ──▶ [Store in PostgreSQL]             │
+│      │                                                      │
+│      │ (Replace with real OpenAI/LangChain node)            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Trigger the workflow
+
+```bash
+curl -X POST http://localhost:5678/webhook/scrape-start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com",
+    "apiKey": "<your-api-key>"
+  }'
+```
+
+The workflow passes your API key in the `x-api-key` header when calling the Crawlee API. Results flow back through the second webhook, get processed by the AI node, and land in PostgreSQL — all scoped to your `user_id`.
+
+### Converting to real AI
+
+Replace the **AI Extract (Mock)** Code node with an **OpenAI** or **LangChain Chat** node:
+
+1. Add an OpenAI node (requires `N8N_AI_ENABLED=true` — already set in `docker-compose.yml`)
+2. Connect it between the result Webhook and the PostgreSQL node
+3. Configure your `OPENAI_API_KEY` credential in n8n
+4. Prompt example: _"Summarize this markdown and extract key data points as JSON"_
+
+## API Reference
+
+### `POST /api/scrape`
+
+Enqueue a URL for asynchronous scraping.
+
+**Headers:**
+
+| Header | Required | Example |
+|---|---|---|
+| `Content-Type` | Yes | `application/json` |
+| `x-api-key` | Yes | `wsp_abc123def456` |
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | `string` | Yes | Target URL to scrape |
+| `selectors` | `string[]` | No | CSS selectors for targeted extraction (default: full page) |
+| `webhookUrl` | `string` | No | URL to receive the result when the job completes |
+
+**Response `202 Accepted`:**
+
+```json
+{
+  "jobId": "7b8c9d0e",
+  "status": "queued",
+  "userId": "user_demo",
+  "message": "Scrape job enqueued for https://example.com"
+}
+```
+
 **Error responses:**
-- `401` — Missing or invalid API key
-- `429` — Per-user rate limit exceeded (10 req/min)
-- `400` — Missing or invalid URL
-- `500` — Failed to enqueue job
+
+| Status | Meaning |
+|---|---|
+| `400` | Missing or invalid URL |
+| `401` | Missing or invalid API key |
+| `429` | Per-user rate limit exceeded (10 requests per minute) |
+| `500` | Failed to enqueue job |
 
 ### `GET /health`
 
@@ -301,33 +274,100 @@ npm run typecheck  # TypeScript type check
 }
 ```
 
-## AGENTS.md Requirements — Compliance Checklist
+## Multi-Tenant Administration
 
-| Requirement | Status | Implementation |
-|-------------|--------|----------------|
-| Microservice Pattern | ✅ | Crawlee runs as standalone Express REST API, decoupled from n8n |
-| Proxy & Stealth | ✅ | SOCKS5 proxy via `ProxyConfiguration`, `useFingerprints: true` |
-| Anti-Bot & Dynamic Content | ✅ | `networkidle` wait, stealth fingerprints, JS rendering |
-| Resilience | ✅ | 3 retries, timeout handling (30s nav, 60s handler), 504 on timeout |
-| Dockerized Setup | ✅ | Single `docker-compose.yml` with n8n + PostgreSQL + Redis + Crawlee API |
-| TypeScript | ✅ | Full TypeScript with strict mode |
-| ESLint/Prettier | ✅ | Configured in `.eslintrc.json` and `.prettierrc` |
-| Environment Variables | ✅ | All configurable via `.env` |
+### Creating API keys
+
+```sql
+-- Create a key for a new user
+INSERT INTO api_keys (key_value, user_id, name)
+VALUES ('wsp_' || substr(md5(random()::text), 1, 16), 'user_alice', 'Alice');
+
+-- List all keys
+SELECT id, key_value, user_id, name, is_active, created_at FROM api_keys;
+
+-- Revoke a user's access
+UPDATE api_keys SET is_active = false WHERE user_id = 'user_alice';
+```
+
+### Data isolation
+
+Every row in the `scraped_pages` table is tagged with `user_id`. The Crawlee API enforces authentication via the `api_keys` table, and the worker embeds `userId` in every webhook callback. The n8n workflow stores this value alongside each record — ensuring no user ever sees another user's data.
+
+## Environment Variables
+
+| Variable | Default | Service | Description |
+|---|---|---|---|
+| `DB_USER` | `n8n` | All | PostgreSQL user |
+| `DB_PASSWORD` | `n8n_password` | All | PostgreSQL password |
+| `DB_NAME` | `n8n` | All | PostgreSQL database name |
+| `DB_PORT` | `5432` | All | PostgreSQL port |
+| `N8N_PORT` | `5678` | n8n | n8n web UI port |
+| `N8N_WEBHOOK_URL` | `http://localhost:5678/` | n8n | Public URL for webhook callbacks |
+| `N8N_ENCRYPTION_KEY` | *(required)* | n8n | Encryption key for n8n credentials |
+| `CRAWLEE_PORT` | `3001` | Crawlee API | API port |
+| `PROXY_URL` | `socks5://127.0.0.1:1080` | Crawlee API | SOCKS5 proxy for Playwright |
+| `REDIS_HOST` | `redis` | Crawlee API | Redis hostname |
+| `REDIS_PORT` | `6379` | Crawlee API | Redis port |
+| `MAX_CONCURRENCY` | `3` | Crawlee API | Max concurrent Chromium browsers |
+
+## Project Structure
+
+```
+webscrape-ai-platform/
+├── docker-compose.yml              # Stack orchestration
+├── .env                            # Environment variables
+├── AGENTS.md                       # Architecture decisions
+├── crawlee-api/
+│   ├── Dockerfile
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── src/
+│       ├── index.ts                # Express server, auth, worker init
+│       ├── middleware/
+│       │   └── auth.ts             # API key → userId middleware
+│       ├── routes/
+│       │   └── scrape.ts           # POST /api/scrape handler
+│       └── services/
+│           ├── db.ts               # PostgreSQL pool + queries
+│           ├── queue.ts            # BullMQ queue
+│           ├── worker.ts           # BullMQ worker (scraping)
+│           └── scraper.ts          # PlaywrightCrawler + Turndown
+├── n8n-workflows/
+│   └── scrape-and-extract.json     # Importable n8n workflow
+└── README.md
+```
+
+## Development
+
+```bash
+cd crawlee-api
+npm install
+npm run dev          # Hot-reload development server
+npm run build        # Compile TypeScript → dist/
+npm run lint         # ESLint
+npm run typecheck    # tsc --noEmit
+```
 
 ## Roadmap
 
-- [x] Headless scraping with PlaywrightCrawler
-- [x] Markdown extraction via Turndown
-- [x] SOCKS5 proxy support
-- [x] Docker Compose deployment
-- [x] n8n workflow with AI extraction stub
-- [x] Rate limiting & retry logic
-- [x] BullMQ queue architecture (prevents browser OOM)
-- [x] Multi-tenant: API key auth, data isolation, per-user rate limits
-- [ ] Real OpenAI/LangChain integration in the n8n workflow
-- [ ] pgvector RAG pipeline
-- [ ] Web UI for managing API keys and jobs
+- [x] Headless scraping with PlaywrightCrawler + stealth
+- [x] LLM-ready Markdown extraction (Turndown)
+- [x] Async BullMQ queue with Redis
+- [x] Multi-tenant API key auth & data isolation
+- [x] Per-user rate limiting
+- [x] SOCKS5 proxy support (Hysteria-compatible)
+- [x] Docker Compose one-command deploy
+- [x] n8n workflow (async trigger + result handler)
+- [ ] Real OpenAI / LangChain AI node integration
+- [ ] pgvector RAG pipeline (semantic search on scraped data)
+- [ ] Admin dashboard (manage API keys, view jobs)
+- [ ] OpenAPI / Swagger documentation
+
+## Contributing
+
+Contributions are welcome. Open an issue or submit a pull request on [GitHub](https://github.com/TriggerMinds/webscrape-ai-platform).
 
 ## License
 
-MIT
+MIT — use it, modify it, ship it.
