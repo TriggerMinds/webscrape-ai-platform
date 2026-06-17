@@ -1,0 +1,144 @@
+{
+  "name": "Scrape & Extract (AI Pipeline)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "options": {},
+        "path": "scrape-start"
+      },
+      "id": "11111111-1111-1111-1111-111111111111",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 120000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"url\": \"{{ $json.url }}\"\n}",
+        "method": "POST"
+      },
+      "id": "22222222-2222-2222-2222-222222222222",
+      "name": "Scrape URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300],
+      "credentials": {
+        "httpRequest": {
+          "url": "http://crawlee-api:3001/api/scrape"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mock AI processing — swap this node for an OpenAI/LangChain node\n// to do real summarization or structured extraction.\n\nconst items = $input.all();\n\nreturn items.map(item => ({\n  json: {\n    url: item.json.url,\n    title: item.json.title,\n    markdown: item.json.markdown,\n    summary: item.json.markdown\n      ? item.json.markdown.slice(0, 500) + '...'\n      : '',\n    wordCount: item.json.markdown\n      ? item.json.markdown.split(/\\s+/).length\n      : 0,\n    processedAt: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "33333333-3333-3333-3333-333333333333",
+      "name": "AI Extract (Mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "table": {
+            "value": "scraped_pages",
+            "__rl": true
+          }
+        },
+        "options": {
+          "conflictType": "upsert",
+          "conflictFields": ["url"]
+        },
+        "columns": {
+          "mappings": {
+            "url": {
+              "value": "={{ $json.url }}"
+            },
+            "title": {
+              "value": "={{ $json.title }}"
+            },
+            "markdown": {
+              "value": "={{ $json.markdown }}"
+            },
+            "summary": {
+              "value": "={{ $json.summary }}"
+            },
+            "word_count": {
+              "value": "={{ $json.wordCount }}"
+            },
+            "processed_at": {
+              "value": "={{ $json.processedAt }}"
+            }
+          }
+        }
+      },
+      "id": "44444444-4444-4444-4444-444444444444",
+      "name": "Store in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "sql": "CREATE TABLE IF NOT EXISTS scraped_pages (\n  id SERIAL PRIMARY KEY,\n  url TEXT UNIQUE NOT NULL,\n  title TEXT,\n  markdown TEXT,\n  summary TEXT,\n  word_count INTEGER,\n  processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()\n);\n\n-- Enable pgvector extension for future RAG use\nCREATE EXTENSION IF NOT EXISTS vector;"
+      },
+      "id": "55555555-5555-5555-5555-555555555555",
+      "name": "Initialize DB Schema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.1,
+      "position": [850, 550]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Scrape URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape URL": {
+      "main": [
+        [
+          {
+            "node": "AI Extract (Mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extract (Mock)": {
+      "main": [
+        [
+          {
+            "node": "Store in PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "versionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "active": false,
+  "settings": {},
+  "tags": [],
+  "id": "66666666-6666-6666-6666-666666666666",
+  "createdAt": "2026-06-17T12:00:00.000Z",
+  "updatedAt": "2026-06-17T12:00:00.000Z"
+}

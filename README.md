@@ -56,7 +56,9 @@ docker compose up -d
 
 1. Open `http://localhost:5678` in your browser
 2. Set up your n8n account
-3. Set the required environment variable `N8N_ENCRYPTION_KEY` (or pass it in a `.env` file)
+3. Set the required environment variable `N8N_ENCRYPTION_KEY` in your `.env` file
+4. Import the workflow from `n8n-workflows/scrape-and-extract.json`
+5. Run the **Initialize DB Schema** node in the workflow (or run the SQL manually) to create the `scraped_pages` table
 
 ### 3. Scrape a URL via the API
 
@@ -89,8 +91,16 @@ curl -X POST http://localhost:3001/api/scrape \
 
 1. In n8n, go to **Workflows** → **Import from File**
 2. Select `n8n-workflows/scrape-and-extract.json`
-3. Configure your OpenAI API key in the LangChain node
+3. The workflow includes a **Code** node as a mock AI extractor — replace it with an OpenAI/LangChain node for real summarization
 4. Activate the workflow
+
+### 5. Trigger a scrape
+
+```bash
+curl -X POST http://localhost:5678/webhook/scrape-start \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+```
 
 ## Environment Variables
 
@@ -129,6 +139,7 @@ PROXY_URL=socks5://127.0.0.1:1080
 │       └── services/
 │           └── scraper.ts      # PlaywrightCrawler + Turndown
 ├── n8n-workflows/              # Exported n8n workflow JSON files
+│   └── scrape-and-extract.json # Webhook → Scrape → AI → PostgreSQL
 └── AGENTS.md                   # Architecture conventions
 ```
 
