@@ -1,7 +1,9 @@
+import { createHmac } from 'node:crypto';
 import { Worker, QueueBaseOptions } from 'bullmq';
 import { ScrapeJobData } from './queue';
 import { scrapeUrl, ProxyUnreachableError } from './scraper';
 import { pool } from './db';
+import { setCachedResult } from './cache';
 import { logger } from './logger';
 
 const connection: QueueBaseOptions['connection'] = {
@@ -11,6 +13,7 @@ const connection: QueueBaseOptions['connection'] = {
 
 const concurrency = parseInt(process.env.MAX_CONCURRENCY || '3', 10);
 const maxWebhookRetries = 3;
+const webhookSecret = process.env.WEBHOOK_SECRET || '';
 
 export function categorizeError(err: unknown): { statusCode: number; message: string } {
   if (err instanceof ProxyUnreachableError) {
@@ -34,18 +37,30 @@ function checkWebhookScheme(url: string): void {
   }
 }
 
+function signPayload(payload: Record<string, unknown>): string {
+  if (!webhookSecret) return '';
+  const body = JSON.stringify(payload);
+  return createHmac('sha256', webhookSecret).update(body).digest('hex');
+}
+
 async function deliverWebhook(
   webhookUrl: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   checkWebhookScheme(webhookUrl);
 
+  const signature = signPayload(payload);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (signature) {
+    headers['x-webhook-signature'] = signature;
+  }
+
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= maxWebhookRetries; attempt++) {
     try {
       await fetch(webhookUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10_000),
       });
@@ -78,18 +93,27 @@ export function createWorker(): Worker {
 
       const result = await scrapeUrl(url, selectors);
 
-      await pool.query(
-        `INSERT INTO scraped_pages (user_id, url, title, markdown, raw_html, word_count, processed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-        [
-          userId,
-          result.url,
-          result.title,
-          result.markdown,
-          result.rawHtml,
-          result.markdown ? result.markdown.split(/\s+/).length : 0,
-        ],
-      );
+      try {
+        await pool.query(
+          `INSERT INTO scraped_pages (user_id, url, title, markdown, raw_html, word_count, processed_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [
+            userId,
+            result.url,
+            result.title,
+            result.markdown,
+            result.rawHtml,
+            result.markdown ? result.markdown.split(/\s+/).length : 0,
+          ],
+        );
+      } catch (err) {
+        logger.error(
+          { jobId: job.id, userId, url, err: err instanceof Error ? err.message : String(err) },
+          'Database insert failed — result still cached and deliverable via webhook',
+        );
+      }
+
+      await setCachedResult(userId, url, result, selectors);
 
       if (webhookUrl) {
         await deliverWebhook(webhookUrl, { success: true, userId, ...result });

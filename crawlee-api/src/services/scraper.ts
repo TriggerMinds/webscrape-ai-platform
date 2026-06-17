@@ -36,8 +36,6 @@ function sanitizeUrl(input: string): string {
 }
 
 async function testProxyConnection(proxyUrl: string): Promise<void> {
-  if (!proxyUrl) return;
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
@@ -60,9 +58,11 @@ async function testProxyConnection(proxyUrl: string): Promise<void> {
 
 export async function scrapeUrl(url: string, selectors?: string[]): Promise<ScrapeResult> {
   const sanitizedUrl = sanitizeUrl(url);
-  const proxyUrl = process.env.PROXY_URL || 'socks5://127.0.0.1:1080';
+  const proxyUrl = process.env.PROXY_URL || '';
 
-  await testProxyConnection(proxyUrl);
+  if (proxyUrl) {
+    await testProxyConnection(proxyUrl);
+  }
 
   let capturedResult: ScrapeResult | null = null;
 

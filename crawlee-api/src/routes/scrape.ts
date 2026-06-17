@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { addScrapeJob } from '../services/queue';
+import { getCachedResult } from '../services/cache';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { logger } from '../services/logger';
 
@@ -30,17 +31,32 @@ scrapeRouter.post('/scrape', async (req: AuthenticatedRequest, res: Response) =>
     return;
   }
 
+  const trimmedUrl = url.trim();
+  const trimmedSelectors = selectors?.map((s) => s.trim()).filter(Boolean);
+
+  const cached = await getCachedResult(userId, trimmedUrl, trimmedSelectors);
+  if (cached) {
+    logger.info({ userId, url: trimmedUrl }, 'Cache hit — returning cached result');
+    res.json({ cached: true, ...cached });
+    return;
+  }
+
   try {
-    const jobId = await addScrapeJob({ url: url.trim(), selectors, webhookUrl, userId });
+    const jobId = await addScrapeJob({
+      url: trimmedUrl,
+      selectors: trimmedSelectors,
+      webhookUrl,
+      userId,
+    });
     res.status(202).json({
       jobId,
       status: 'queued',
       userId,
-      message: `Scrape job enqueued for ${url}`,
+      message: `Scrape job enqueued for ${trimmedUrl}`,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    logger.error({ userId, url, err: message }, 'Failed to enqueue scrape job');
+    logger.error({ userId, url: trimmedUrl, err: message }, 'Failed to enqueue scrape job');
     res.status(500).json({ error: 'Failed to enqueue scrape job' });
   }
 });
