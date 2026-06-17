@@ -8,7 +8,7 @@
     <a href="#"><img src="https://img.shields.io/badge/Playwright-45ba4b?style=flat&logo=playwright&logoColor=white" alt="Playwright"></a>
     <a href="#"><img src="https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis&logoColor=white" alt="Redis"></a>
     <a href="#"><img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white" alt="PostgreSQL"></a>
-    <a href="#"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License MIT"></a>
+    <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat" alt="License MIT"></a>
   </p>
 </p>
 
@@ -531,8 +531,10 @@ docker compose exec crawlee-api node dist/services/migrate.js
 
 ## Contributing
 
-Contributions are welcome. Open an issue or submit a pull request on [GitHub](https://github.com/TriggerMinds/webscrape-ai-platform).
+Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, testing, and the PR process.
+
+Please review our [Code of Conduct](./CODE_OF_CONDUCT.md) before participating.
 
 ## License
 
-MIT — use it, modify it, ship it.
+MIT — use it, modify it, ship it. See [LICENSE](./LICENSE) for full text.
