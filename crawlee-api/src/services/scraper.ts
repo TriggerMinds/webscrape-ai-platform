@@ -13,7 +13,16 @@ export interface ScrapeResult {
   markdown: string;
 }
 
+function sanitizeUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return trimmed;
+}
+
 export async function scrapeUrl(url: string, selectors?: string[]): Promise<ScrapeResult> {
+  const sanitizedUrl = sanitizeUrl(url);
   const proxyUrl = process.env.PROXY_URL || 'socks5://127.0.0.1:1080';
 
   const crawler = new PlaywrightCrawler({
@@ -35,12 +44,23 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
     preNavigationHooks: [
       async (_ctx, goToOptions) => {
         goToOptions.waitUntil = 'networkidle';
+        goToOptions.timeout = 30_000;
       },
     ],
+    failedRequestHandler: async ({ request, log }) => {
+      log.warning(`Request failed after ${request.retryCount} retries: ${request.url}`);
+      throw new Error(
+        `Failed to scrape ${request.url} after ${request.retryCount} retries`,
+      );
+    },
     requestHandler: async (ctx) => {
       const { page, request } = ctx;
 
-      await page.waitForLoadState('networkidle');
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 30_000 });
+      } catch {
+        await page.waitForLoadState('domcontentloaded', { timeout: 15_000 });
+      }
       await page.waitForTimeout(1000);
 
       const title = await page.title();
@@ -63,7 +83,7 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
       const markdown = turndownService.turndown(rawHtml);
 
       await Dataset.pushData({
-        url: request.loadedUrl || url,
+        url: request.loadedUrl || sanitizedUrl,
         title,
         rawHtml,
         markdown,
@@ -71,7 +91,7 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
     },
   });
 
-  await crawler.run([url]);
+  await crawler.run([sanitizedUrl]);
 
   const dataset = await Dataset.open();
   const { items } = await dataset.getData();
@@ -83,7 +103,7 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
   const item = items[0] as unknown as ScrapeResult;
 
   return {
-    url: item.url || url,
+    url: item.url || sanitizedUrl,
     title: item.title || '',
     rawHtml: item.rawHtml || '',
     markdown: item.markdown || '',
