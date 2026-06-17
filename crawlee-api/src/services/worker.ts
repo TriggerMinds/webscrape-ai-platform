@@ -23,6 +23,17 @@ function categorizeError(err: unknown): { statusCode: number; message: string } 
   return { statusCode: 500, message: msg };
 }
 
+function checkWebhookScheme(url: string): void {
+  if (url.startsWith('http://')) {
+    console.warn(
+      `⚠  Webhook URL uses unencrypted HTTP: ${url}. ` +
+      'Payloads will be sent in plain text. Use HTTPS in production.',
+    );
+  } else if (!url.startsWith('https://')) {
+    console.warn(`⚠  Webhook URL has unrecognized scheme: ${url}`);
+  }
+}
+
 export function createWorker(): Worker {
   const worker = new Worker<ScrapeJobData>(
     'scrape-queue',
@@ -33,6 +44,7 @@ export function createWorker(): Worker {
       const result = await scrapeUrl(url, selectors);
 
       if (webhookUrl) {
+        checkWebhookScheme(webhookUrl);
         console.log(`Sending result to webhook: ${webhookUrl}`);
         await fetch(webhookUrl, {
           method: 'POST',
@@ -58,6 +70,7 @@ export function createWorker(): Worker {
     console.error(`Job ${job.id} (${url}, user ${userId}) failed [${statusCode}]:`, message);
 
     if (webhookUrl) {
+      checkWebhookScheme(webhookUrl);
       try {
         await fetch(webhookUrl, {
           method: 'POST',

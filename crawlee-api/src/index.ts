@@ -1,12 +1,24 @@
 import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { scrapeRouter } from './routes/scrape';
 import { authMiddleware, AuthenticatedRequest } from './middleware/auth';
 import { createWorker } from './services/worker';
-import { initDbSchema, getUserJobCount } from './services/db';
+import { initDbSchema } from './services/db';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
+
+app.use(helmet());
+
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()) || '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'x-api-key'],
+  }),
+);
 
 app.use(express.json({ limit: '1mb' }));
 

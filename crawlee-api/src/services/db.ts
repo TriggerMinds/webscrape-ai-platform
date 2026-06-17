@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { hashApiKey } from './crypto';
 
 const pool = new Pool({
   host: process.env.DB_HOST || '127.0.0.1',
@@ -16,7 +17,7 @@ export async function initDbSchema(): Promise<void> {
     await client.query(`
       CREATE TABLE IF NOT EXISTS api_keys (
         id SERIAL PRIMARY KEY,
-        key_value TEXT UNIQUE NOT NULL,
+        key_hash TEXT UNIQUE NOT NULL,
         user_id TEXT NOT NULL,
         name TEXT NOT NULL DEFAULT '',
         is_active BOOLEAN NOT NULL DEFAULT true,
@@ -48,29 +49,21 @@ export async function initDbSchema(): Promise<void> {
   }
 }
 
-export async function lookupApiKey(keyValue: string): Promise<{ userId: string; name: string } | null> {
+export async function lookupApiKey(rawKey: string): Promise<{ userId: string; name: string } | null> {
+  const keyHash = hashApiKey(rawKey);
   const result = await pool.query(
-    'SELECT user_id, name FROM api_keys WHERE key_value = $1 AND is_active = true',
-    [keyValue],
+    'SELECT user_id, name FROM api_keys WHERE key_hash = $1 AND is_active = true',
+    [keyHash],
   );
   if (result.rows.length === 0) return null;
   return { userId: result.rows[0].user_id, name: result.rows[0].name };
 }
 
-export async function createApiKey(keyValue: string, userId: string, name: string): Promise<void> {
+export async function insertApiKeyHash(keyHash: string, userId: string, name: string): Promise<void> {
   await pool.query(
-    'INSERT INTO api_keys (key_value, user_id, name) VALUES ($1, $2, $3) ON CONFLICT (key_value) DO NOTHING',
-    [keyValue, userId, name],
+    'INSERT INTO api_keys (key_hash, user_id, name) VALUES ($1, $2, $3) ON CONFLICT (key_hash) DO NOTHING',
+    [keyHash, userId, name],
   );
-}
-
-export async function getUserJobCount(userId: string, windowMs: number): Promise<number> {
-  const result = await pool.query(
-    `SELECT COUNT(*) AS cnt FROM scraped_pages
-     WHERE user_id = $1 AND processed_at > NOW() - make_interval(secs => $2)`,
-    [userId, Math.floor(windowMs / 1000)],
-  );
-  return parseInt(result.rows[0].cnt, 10);
 }
 
 export { pool };
