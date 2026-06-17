@@ -424,10 +424,84 @@ hysteria client --config config.yaml
 
 # 3. The API tests proxy connectivity against httpbin.org/ip.
 #    If httpbin is blocked, the check itself will fail.
-#    Set PROXY_URL to an empty value or remove it to skip proxying:
+#    Set PROXY_URL to an empty value or remove it to skip proxying
+#    (see "Zero-Budget Proxy Guide" above):
 #
 #    PROXY_URL=
 ```
+
+If you don't have a proxy yet, see the **[Zero-Budget Proxy Guide](#zero-budget-proxy-guide)** above for free alternatives including Cloudflare WARP.
+
+## Zero-Budget Proxy Guide
+
+You don't need expensive residential proxies to use this platform. Here's how to start for free.
+
+### Option 1: No proxy (direct connection)
+
+Set `PROXY_URL` to an empty value in your `.env`:
+
+```env
+PROXY_URL=
+```
+
+With no proxy configured, the scraper connects directly from your server's IP. The built-in Playwright stealth configuration (`useFingerprints: true`, `--no-sandbox`, randomized browser headers) is often enough to avoid basic blocking on low-volume scraping (a few hundred pages per day).
+
+**Trade-off**: Your server IP is visible to target sites. This is fine for public data, personal use, and testing. For high-volume or aggressive scraping, use Option 2.
+
+### Option 2: Cloudflare WARP (free, recommended upgrade)
+
+[Cloudflare WARP](https://1.1.1.1/) is a free VPN/proxy service by Cloudflare. When configured in SOCKS5 proxy mode, it gives you a fast, rotating IP from Cloudflare's edge network — at zero cost.
+
+**Step-by-step:**
+
+1. Install the WARP client on your host machine (not inside Docker):
+
+   ```bash
+   # Linux (Debian/Ubuntu)
+   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+   echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+   sudo apt update && sudo apt install cloudflare-warp
+
+   # macOS
+   brew install --cask cloudflare-warp
+
+   # Windows
+   # Download from https://1.1.1.1/ and install the desktop app
+   ```
+
+2. Register and connect in proxy mode:
+
+   ```bash
+   warp-cli register
+   warp-cli set-mode proxy
+   warp-cli connect
+   ```
+
+   WARP now listens on `127.0.0.1:40000` as a SOCKS5 proxy.
+
+3. Point the Crawlee API at WARP:
+
+   ```env
+   PROXY_URL=socks5://host.docker.internal:40000
+   ```
+
+   > On Linux, replace `host.docker.internal` with your host's LAN IP (e.g. `192.168.1.10`) or use `--add-host host.docker.internal:host-gateway` in your compose file.
+
+4. Restart the stack:
+
+   ```bash
+   docker compose up -d
+   ```
+
+**Why WARP?**
+- Free, no usage caps for SOCKS5 mode
+- Cloudflare's global network — low latency
+- Your real IP is hidden behind Cloudflare's IP range
+- Works as a drop-in SOCKS5 proxy; no code changes needed
+
+### Option 3: Hysteria / custom stealth proxy
+
+For the original Hysteria-based stealth setup (used in the default `socks5://127.0.0.1:1080`), refer to the [Hysteria documentation](https://hysteria.network/). This is the most resistant to deep packet inspection but requires your own obfuscated server.
 
 ### Webhook callbacks not arriving
 
