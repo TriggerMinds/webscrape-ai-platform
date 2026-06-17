@@ -1,5 +1,5 @@
 import { Worker, QueueBaseOptions } from 'bullmq';
-import { ScrapeJobData } from './queue';
+import { ScrapeJobData, scrapeQueue } from './queue';
 import { scrapeUrl, ProxyUnreachableError } from './scraper';
 
 const connection: QueueBaseOptions['connection'] = {
@@ -8,6 +8,7 @@ const connection: QueueBaseOptions['connection'] = {
 };
 
 const concurrency = parseInt(process.env.MAX_CONCURRENCY || '3', 10);
+const maxWebhookRetries = 3;
 
 function categorizeError(err: unknown): { statusCode: number; message: string } {
   if (err instanceof ProxyUnreachableError) {
@@ -34,6 +35,41 @@ function checkWebhookScheme(url: string): void {
   }
 }
 
+async function deliverWebhook(
+  webhookUrl: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  checkWebhookScheme(webhookUrl);
+
+  let lastErr: Error | null = null;
+  for (let attempt = 1; attempt <= maxWebhookRetries; attempt++) {
+    try {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10_000),
+      });
+      return;
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxWebhookRetries) {
+        const delay = Math.min(1000 * 2 ** attempt, 15_000);
+        console.warn(
+          `Webhook delivery attempt ${attempt}/${maxWebhookRetries} failed for ${webhookUrl}. ` +
+          `Retrying in ${delay}ms... Error: ${lastErr.message}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  console.error(
+    `⚠  DEAD LETTER — Webhook permanently failed after ${maxWebhookRetries} attempts: ${webhookUrl}. ` +
+    `Last error: ${lastErr!.message}. The scrape result is stored in the database but was NOT delivered.`,
+  );
+}
+
 export function createWorker(): Worker {
   const worker = new Worker<ScrapeJobData>(
     'scrape-queue',
@@ -44,14 +80,8 @@ export function createWorker(): Worker {
       const result = await scrapeUrl(url, selectors);
 
       if (webhookUrl) {
-        checkWebhookScheme(webhookUrl);
-        console.log(`Sending result to webhook: ${webhookUrl}`);
-        await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ success: true, userId, ...result }),
-          signal: AbortSignal.timeout(10_000),
-        });
+        console.log(`Delivering result to webhook: ${webhookUrl}`);
+        await deliverWebhook(webhookUrl, { success: true, userId, ...result });
       }
 
       return { ...result, userId };
@@ -69,29 +99,30 @@ export function createWorker(): Worker {
     const { statusCode, message } = categorizeError(err);
     console.error(`Job ${job.id} (${url}, user ${userId}) failed [${statusCode}]:`, message);
 
+    if (job.attemptsMade >= (job.opts?.attempts || 3)) {
+      console.error(
+        `⚠  DEAD LETTER — Job ${job.id} (${url}) exhausted all ${job.attemptsMade} retries. ` +
+        `No further attempts will be made.`,
+      );
+    }
+
     if (webhookUrl) {
-      checkWebhookScheme(webhookUrl);
-      try {
-        await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            success: false,
-            userId,
-            url,
-            error: message,
-            statusCode,
-          }),
-          signal: AbortSignal.timeout(10_000),
-        });
-      } catch {
-        console.error(`Failed to send error webhook for job ${job.id}`);
-      }
+      await deliverWebhook(webhookUrl, {
+        success: false,
+        userId,
+        url,
+        error: message,
+        statusCode,
+      });
     }
   });
 
   worker.on('completed', (job) => {
     console.log(`Job ${job.id} completed successfully`);
+  });
+
+  process.on('SIGTERM', async () => {
+    await worker.close();
   });
 
   console.log(`BullMQ Worker started (concurrency=${concurrency})`);

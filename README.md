@@ -28,6 +28,8 @@ A self-hosted, multi-tenant AI web scraping and orchestration platform that repl
 | **🕵️ SOCKS5 Proxy Support** | Route all Playwright traffic through a stealth proxy (Hysteria-compatible) |
 | **🧩 n8n Integration** | Importable workflow: trigger scrape → AI extract → PostgreSQL storage |
 | **🐳 One-Command Deploy** | `docker compose up -d` — n8n + PostgreSQL + Redis + Crawlee API |
+| **📊 Bull Board Dashboard** | Live queue monitoring at `/admin/queues` (behind API key auth) |
+| **🔄 Webhook Resilience** | Exponential backoff retry (×3) + Dead Letter Queue logging |
 
 ## Architecture
 
@@ -262,8 +264,10 @@ Enqueue a URL for asynchronous scraping.
 |---|---|
 | `400` | Missing or invalid URL |
 | `401` | Missing or invalid API key |
-| `429` | Per-user rate limit exceeded (10 requests per minute) |
+| `429` | Per-user rate limit exceeded (10 requests per minute) / Brute-force blocked |
 | `500` | Failed to enqueue job |
+| `502` | SOCKS5 proxy unreachable (returned in webhook callback) |
+| `504` | Request timed out while scraping (returned in webhook callback) |
 
 ### `GET /health`
 
@@ -278,13 +282,27 @@ Enqueue a URL for asynchronous scraping.
 
 ### Creating API keys
 
-```sql
--- Create a key for a new user
-INSERT INTO api_keys (key_value, user_id, name)
-VALUES ('wsp_' || substr(md5(random()::text), 1, 16), 'user_alice', 'Alice');
+API keys are stored as SHA-256 hashes. The raw key is shown once at creation.
 
--- List all keys
-SELECT id, key_value, user_id, name, is_active, created_at FROM api_keys;
+```bash
+# Generate a key via Node (run inside crawlee-api/)
+node -e "
+const { generateApiKey, hashApiKey, formatCreateKeyOutput } = require('./dist/services/crypto');
+const raw = generateApiKey();
+console.log(formatCreateKeyOutput(raw));
+console.log('SQL to insert:');
+console.log('INSERT INTO api_keys (key_hash, user_id, name)');
+console.log(\"VALUES ('\" + hashApiKey(raw) + \"', 'user_alice', 'Alice');\");
+"
+
+# Or directly via docker compose exec:
+docker compose exec postgres psql -U n8n -d n8n -c "
+INSERT INTO api_keys (key_hash, user_id, name)
+VALUES (encode(sha256('wsp_' || substr(md5(random()::text), 1, 8)::bytea), 'hex'), 'user_alice', 'Alice');
+"
+
+-- List all keys (hashes only — raw keys are never stored)
+SELECT id, key_hash, user_id, name, is_active, created_at FROM api_keys;
 
 -- Revoke a user's access
 UPDATE api_keys SET is_active = false WHERE user_id = 'user_alice';
@@ -310,6 +328,7 @@ Every row in the `scraped_pages` table is tagged with `user_id`. The Crawlee API
 | `REDIS_HOST` | `redis` | Crawlee API | Redis hostname |
 | `REDIS_PORT` | `6379` | Crawlee API | Redis port |
 | `MAX_CONCURRENCY` | `3` | Crawlee API | Max concurrent Chromium browsers |
+| `CORS_ORIGIN` | `*` | Crawlee API | Allowed CORS origins (comma-separated) |
 
 ## Project Structure
 
@@ -318,23 +337,29 @@ webscrape-ai-platform/
 ├── docker-compose.yml              # Stack orchestration
 ├── .env                            # Environment variables
 ├── AGENTS.md                       # Architecture decisions
+├── .github/workflows/
+│   └── ci.yml                      # PR checks: typecheck + lint
 ├── crawlee-api/
 │   ├── Dockerfile
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts                # Express server, auth, worker init
+│       ├── index.ts                # Express server, auth, worker, bull-board
 │       ├── middleware/
 │       │   └── auth.ts             # API key → userId middleware
 │       ├── routes/
-│       │   └── scrape.ts           # POST /api/scrape handler
+│       │   ├── scrape.ts           # POST /api/scrape handler
+│       │   └── admin.ts            # /admin/queues Bull Board dashboard
 │       └── services/
-│           ├── db.ts               # PostgreSQL pool + queries
+│           ├── db.ts               # PostgreSQL pool
+│           ├── migrate.ts          # Migration runner (_migrations table)
+│           ├── crypto.ts           # API key generation + SHA-256 hashing
 │           ├── queue.ts            # BullMQ queue
-│           ├── worker.ts           # BullMQ worker (scraping)
+│           ├── worker.ts           # BullMQ worker (scraping + webhook retry)
 │           └── scraper.ts          # PlaywrightCrawler + Turndown
 ├── n8n-workflows/
 │   └── scrape-and-extract.json     # Importable n8n workflow
+├── .env.example
 └── README.md
 ```
 
@@ -363,6 +388,72 @@ npm run typecheck    # tsc --noEmit
 - [ ] pgvector RAG pipeline (semantic search on scraped data)
 - [ ] Admin dashboard (manage API keys, view jobs)
 - [ ] OpenAPI / Swagger documentation
+
+## Troubleshooting
+
+### Playwright / Chromium crashes in Docker
+
+The official `mcr.microsoft.com/playwright` image bundles all system dependencies for Chromium. If you see errors like `Missing libraries` or `Browser closed unexpectedly`:
+
+```bash
+# Verify the container has the right image
+docker compose exec crawlee-api npx playwright --version
+
+# Check Chromium is installed
+docker compose exec crawlee-api ls /usr/bin/chromium 2>/dev/null || \
+  echo "Chromium not found — rebuild the image"
+docker compose build --no-cache crawlee-api
+```
+
+If the container runs out of memory, lower `MAX_CONCURRENCY` in `.env`:
+
+```env
+MAX_CONCURRENCY=1
+```
+
+### SOCKS5 proxy unreachable
+
+If jobs consistently fail with `SOCKS5 Proxy onbereikbaar (502)`:
+
+```bash
+# 1. Verify the proxy is running on the host
+curl --socks5 127.0.0.1:1080 http://httpbin.org/ip
+
+# 2. If using Hysteria, check the config
+hysteria client --config config.yaml
+
+# 3. The API tests proxy connectivity against httpbin.org/ip.
+#    If httpbin is blocked, the check itself will fail.
+#    Set PROXY_URL to an empty value or remove it to skip proxying:
+#
+#    PROXY_URL=
+```
+
+### Webhook callbacks not arriving
+
+The worker retries webhook delivery up to 3 times with exponential backoff (1s → 2s → 4s). If delivery permanently fails:
+
+1. Check the worker logs for `DEAD LETTER` entries
+2. Verify the `webhookUrl` is reachable from inside Docker (`curl` from the crawlee-api container)
+3. Ensure n8n's webhook endpoint (`/webhook/scrape-result`) is **Active** in the n8n UI
+
+### Bull Board dashboard
+
+A live queue monitoring dashboard is available at:
+
+```
+http://localhost:3001/admin/queues
+```
+
+Requires a valid `x-api-key` header (same auth as the scrape API). You can view pending, active, completed, and failed jobs in real time.
+
+### Database migrations
+
+Migrations run automatically on startup. The `_migrations` table tracks which have been applied. To re-run manually:
+
+```bash
+docker compose exec crawlee-api node dist/services/migrate.js
+```
 
 ## Contributing
 

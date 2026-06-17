@@ -9,9 +9,12 @@
     "dev": "tsx watch src/index.ts",
     "lint": "eslint src/ --ext .ts",
     "format": "prettier --write 'src/**/*.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate": "node dist/services/migrate.js"
   },
   "dependencies": {
+    "@bull-board/api": "^8.0.0",
+    "@bull-board/express": "^8.0.0",
     "bullmq": "^5.78.1",
     "cors": "^2.8.6",
     "crawlee": "^3.12.0",

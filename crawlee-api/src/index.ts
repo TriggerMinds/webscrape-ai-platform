@@ -3,9 +3,10 @@ import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { scrapeRouter } from './routes/scrape';
+import { adminRouter } from './routes/admin';
 import { authMiddleware, AuthenticatedRequest } from './middleware/auth';
 import { createWorker } from './services/worker';
-import { initDbSchema } from './services/db';
+import { runMigrations } from './services/migrate';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -50,15 +51,16 @@ const userRateLimiter = rateLimit({
 app.use('/api/scrape', userRateLimiter);
 
 app.use('/api', scrapeRouter);
+app.use('/admin', adminRouter);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('Unhandled error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-initDbSchema()
-  .then(() => console.log('Database schema ready'))
-  .catch((err) => console.error('Schema init failed:', err));
+runMigrations()
+  .then(() => console.log('Migrations complete'))
+  .catch((err) => console.error('Migration failed:', err));
 
 const worker = createWorker();
 
