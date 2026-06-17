@@ -1,0 +1,70 @@
+import { Worker, QueueBaseOptions } from 'bullmq';
+import { ScrapeJobData } from './queue';
+import { scrapeUrl } from './scraper';
+
+const connection: QueueBaseOptions['connection'] = {
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+};
+
+const concurrency = parseInt(process.env.MAX_CONCURRENCY || '3', 10);
+
+export function createWorker(): Worker {
+  const worker = new Worker<ScrapeJobData>(
+    'scrape-queue',
+    async (job) => {
+      const { url, selectors, webhookUrl } = job.data;
+      console.log(`Worker processing job ${job.id}: ${url}`);
+
+      const result = await scrapeUrl(url, selectors);
+
+      if (webhookUrl) {
+        console.log(`Sending result to webhook: ${webhookUrl}`);
+        await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ success: true, ...result }),
+          signal: AbortSignal.timeout(10_000),
+        });
+      }
+
+      return result;
+    },
+    {
+      connection,
+      concurrency,
+      lockDuration: 120_000,
+    },
+  );
+
+  worker.on('failed', async (job, err) => {
+    if (!job) return;
+    const { webhookUrl, url } = job.data;
+    console.error(`Job ${job.id} (${url}) failed:`, err.message);
+
+    if (webhookUrl) {
+      try {
+        await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            success: false,
+            url,
+            error: err.message,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch {
+        console.error(`Failed to send error webhook for job ${job.id}`);
+      }
+    }
+  });
+
+  worker.on('completed', (job) => {
+    console.log(`Job ${job.id} completed successfully`);
+  });
+
+  console.log(`BullMQ Worker started (concurrency=${concurrency})`);
+
+  return worker;
+}

@@ -43,14 +43,31 @@ services:
     ports:
       - "${N8N_PORT:-5678}:5678"
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   crawlee-api:
     build:
       context: ./crawlee-api
       dockerfile: Dockerfile
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       PORT: ${CRAWLEE_PORT:-3001}
       PROXY_URL: ${PROXY_URL:-socks5://127.0.0.1:1080}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      MAX_CONCURRENCY: ${MAX_CONCURRENCY:-3}
       NODE_ENV: production
     ports:
       - "${CRAWLEE_PORT:-3001}:3001"

@@ -1,6 +1,7 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { scrapeRouter } from './routes/scrape';
+import { createWorker } from './services/worker';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -28,8 +29,16 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error' });
 });
 
+const worker = createWorker();
+
 app.listen(PORT, () => {
   console.log(`Crawlee API listening on port ${PORT}`);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('Shutting down...');
+  await worker.close();
+  process.exit(0);
 });
 
 export default app;

@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { scrapeUrl } from '../services/scraper';
+import { addScrapeJob } from '../services/queue';
 
 export const scrapeRouter = Router();
 
 interface ScrapeRequestBody {
   url?: string;
   selectors?: string[];
+  webhookUrl?: string;
 }
 
 interface ErrorResponse {
@@ -14,7 +15,7 @@ interface ErrorResponse {
 }
 
 scrapeRouter.post('/scrape', async (req: Request, res: Response) => {
-  const { url, selectors } = req.body as ScrapeRequestBody;
+  const { url, selectors, webhookUrl } = req.body as ScrapeRequestBody;
 
   if (!url || typeof url !== 'string' || url.trim().length === 0) {
     const errResp: ErrorResponse = { error: 'Missing or invalid "url" in request body' };
@@ -28,22 +29,22 @@ scrapeRouter.post('/scrape', async (req: Request, res: Response) => {
     return;
   }
 
+  if (webhookUrl !== undefined && typeof webhookUrl !== 'string') {
+    const errResp: ErrorResponse = { error: '"webhookUrl" must be a string' };
+    res.status(400).json(errResp);
+    return;
+  }
+
   try {
-    const result = await scrapeUrl(url, selectors);
-    res.json(result);
+    const jobId = await addScrapeJob({ url: url.trim(), selectors, webhookUrl });
+    res.status(202).json({
+      jobId,
+      status: 'queued',
+      message: `Scrape job enqueued for ${url}`,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`Scrape failed for "${url}":`, message);
-
-    const isTimeout =
-      message.toLowerCase().includes('timeout') ||
-      message.toLowerCase().includes('timed out') ||
-      message.toLowerCase().includes('navigation');
-
-    const statusCode = isTimeout ? 504 : 500;
-    const errResp: ErrorResponse = {
-      error: isTimeout ? 'Request timed out while scraping the URL' : message,
-    };
-    res.status(statusCode).json(errResp);
+    console.error(`Failed to enqueue scrape job for "${url}":`, message);
+    res.status(500).json({ error: 'Failed to enqueue scrape job' });
   }
 });
