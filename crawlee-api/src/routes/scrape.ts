@@ -1,5 +1,6 @@
-import { Router, Request, Response } from 'express';
+import { Router, Response } from 'express';
 import { addScrapeJob } from '../services/queue';
+import { AuthenticatedRequest } from '../middleware/auth';
 
 export const scrapeRouter = Router();
 
@@ -14,8 +15,9 @@ interface ErrorResponse {
   details?: string;
 }
 
-scrapeRouter.post('/scrape', async (req: Request, res: Response) => {
+scrapeRouter.post('/scrape', async (req: AuthenticatedRequest, res: Response) => {
   const { url, selectors, webhookUrl } = req.body as ScrapeRequestBody;
+  const userId = req.userId!;
 
   if (!url || typeof url !== 'string' || url.trim().length === 0) {
     const errResp: ErrorResponse = { error: 'Missing or invalid "url" in request body' };
@@ -36,10 +38,11 @@ scrapeRouter.post('/scrape', async (req: Request, res: Response) => {
   }
 
   try {
-    const jobId = await addScrapeJob({ url: url.trim(), selectors, webhookUrl });
+    const jobId = await addScrapeJob({ url: url.trim(), selectors, webhookUrl, userId });
     res.status(202).json({
       jobId,
       status: 'queued',
+      userId,
       message: `Scrape job enqueued for ${url}`,
     });
   } catch (err) {

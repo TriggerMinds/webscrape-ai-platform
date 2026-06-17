@@ -1,5 +1,5 @@
 {
-  "name": "Scrape & Extract (Async Queue)",
+  "name": "Scrape & Extract (Async Queue - Multi-Tenant)",
   "nodes": [
     {
       "parameters": {
@@ -22,7 +22,18 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "{\n  \"url\": \"{{ $json.url }}\",\n  \"webhookUrl\": \"{{ $env.N8N_WEBHOOK_URL }}webhook/scrape-result\"\n}",
-        "method": "POST"
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.apiKey }}"
+            }
+          ]
+        }
       },
       "id": "22222222-2222-2222-2222-222222222222",
       "name": "Queue Scrape Job",
@@ -49,7 +60,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all();\n\nreturn items.map(item => ({\n  json: {\n    url: item.json.url,\n    title: item.json.title,\n    markdown: item.json.markdown,\n    summary: item.json.markdown\n      ? item.json.markdown.slice(0, 500) + '...'\n      : '',\n    wordCount: item.json.markdown\n      ? item.json.markdown.split(/\\s+/).length\n      : 0,\n    processedAt: new Date().toISOString()\n  }\n}));"
+        "jsCode": "const items = $input.all();\n\nreturn items.map(item => ({\n  json: {\n    userId: item.json.userId,\n    url: item.json.url,\n    title: item.json.title,\n    markdown: item.json.markdown,\n    summary: item.json.markdown\n      ? item.json.markdown.slice(0, 500) + '...'\n      : '',\n    wordCount: item.json.markdown\n      ? item.json.markdown.split(/\\s+/).length\n      : 0,\n    processedAt: new Date().toISOString()\n  }\n}));"
       },
       "id": "44444444-4444-4444-4444-444444444444",
       "name": "AI Extract (Mock)",
@@ -68,10 +79,13 @@
         },
         "options": {
           "conflictType": "upsert",
-          "conflictFields": ["url"]
+          "conflictFields": ["url", "user_id"]
         },
         "columns": {
           "mappings": {
+            "user_id": {
+              "value": "={{ $json.userId }}"
+            },
             "url": {
               "value": "={{ $json.url }}"
             },
@@ -101,7 +115,7 @@
     },
     {
       "parameters": {
-        "sql": "CREATE TABLE IF NOT EXISTS scraped_pages (\n  id SERIAL PRIMARY KEY,\n  url TEXT UNIQUE NOT NULL,\n  title TEXT,\n  markdown TEXT,\n  summary TEXT,\n  word_count INTEGER,\n  processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()\n);\n\nCREATE EXTENSION IF NOT EXISTS vector;"
+        "sql": "CREATE TABLE IF NOT EXISTS api_keys (\n  id SERIAL PRIMARY KEY,\n  key_value TEXT UNIQUE NOT NULL,\n  user_id TEXT NOT NULL,\n  name TEXT NOT NULL DEFAULT '',\n  is_active BOOLEAN NOT NULL DEFAULT true,\n  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()\n);\n\nCREATE TABLE IF NOT EXISTS scraped_pages (\n  id SERIAL PRIMARY KEY,\n  user_id TEXT NOT NULL,\n  url TEXT NOT NULL,\n  title TEXT,\n  markdown TEXT,\n  raw_html TEXT,\n  summary TEXT,\n  word_count INTEGER,\n  processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()\n);\n\nCREATE INDEX IF NOT EXISTS idx_scraped_pages_user_id ON scraped_pages(user_id);\nCREATE INDEX IF NOT EXISTS idx_scraped_pages_url ON scraped_pages(url);\n\nCREATE EXTENSION IF NOT EXISTS vector;"
       },
       "id": "66666666-6666-6666-6666-666666666666",
       "name": "Initialize DB Schema",
@@ -146,11 +160,11 @@
     }
   },
   "pinData": {},
-  "versionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  "versionId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
   "active": false,
   "settings": {},
   "tags": [],
-  "id": "77777777-7777-7777-7777-777777777777",
-  "createdAt": "2026-06-17T14:00:00.000Z",
-  "updatedAt": "2026-06-17T14:00:00.000Z"
+  "id": "88888888-8888-8888-8888-888888888888",
+  "createdAt": "2026-06-17T14:30:00.000Z",
+  "updatedAt": "2026-06-17T14:30:00.000Z"
 }

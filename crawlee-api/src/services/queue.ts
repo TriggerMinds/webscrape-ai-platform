@@ -11,6 +11,7 @@ export interface ScrapeJobData {
   url: string;
   selectors?: string[];
   webhookUrl?: string;
+  userId: string;
 }
 
 export async function addScrapeJob(data: ScrapeJobData): Promise<string> {

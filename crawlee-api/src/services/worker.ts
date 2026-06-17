@@ -13,8 +13,8 @@ export function createWorker(): Worker {
   const worker = new Worker<ScrapeJobData>(
     'scrape-queue',
     async (job) => {
-      const { url, selectors, webhookUrl } = job.data;
-      console.log(`Worker processing job ${job.id}: ${url}`);
+      const { url, selectors, webhookUrl, userId } = job.data;
+      console.log(`Worker processing job ${job.id} (user ${userId}): ${url}`);
 
       const result = await scrapeUrl(url, selectors);
 
@@ -23,12 +23,12 @@ export function createWorker(): Worker {
         await fetch(webhookUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ success: true, ...result }),
+          body: JSON.stringify({ success: true, userId, ...result }),
           signal: AbortSignal.timeout(10_000),
         });
       }
 
-      return result;
+      return { ...result, userId };
     },
     {
       connection,
@@ -39,8 +39,8 @@ export function createWorker(): Worker {
 
   worker.on('failed', async (job, err) => {
     if (!job) return;
-    const { webhookUrl, url } = job.data;
-    console.error(`Job ${job.id} (${url}) failed:`, err.message);
+    const { webhookUrl, url, userId } = job.data;
+    console.error(`Job ${job.id} (${url}, user ${userId}) failed:`, err.message);
 
     if (webhookUrl) {
       try {
@@ -49,6 +49,7 @@ export function createWorker(): Worker {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             success: false,
+            userId,
             url,
             error: err.message,
           }),
