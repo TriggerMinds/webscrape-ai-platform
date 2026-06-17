@@ -13,6 +13,13 @@ export interface ScrapeResult {
   markdown: string;
 }
 
+export class ProxyUnreachableError extends Error {
+  constructor(proxyUrl: string) {
+    super(`SOCKS5 Proxy onbereikbaar: ${proxyUrl}`);
+    this.name = 'ProxyUnreachableError';
+  }
+}
+
 function sanitizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!/^https?:\/\//i.test(trimmed)) {
@@ -21,9 +28,33 @@ function sanitizeUrl(input: string): string {
   return trimmed;
 }
 
+async function testProxyConnection(proxyUrl: string): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  try {
+    const response = await fetch('http://httpbin.org/ip', {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'curl/8.0' },
+    } as RequestInit & { signal: AbortSignal });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+  } catch {
+    // Proxy test failed — throw a structured error
+    clearTimeout(timeout);
+    throw new ProxyUnreachableError(proxyUrl);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function scrapeUrl(url: string, selectors?: string[]): Promise<ScrapeResult> {
   const sanitizedUrl = sanitizeUrl(url);
   const proxyUrl = process.env.PROXY_URL || 'socks5://127.0.0.1:1080';
+
+  await testProxyConnection(proxyUrl);
 
   const crawler = new PlaywrightCrawler({
     proxyConfiguration: new ProxyConfiguration({
@@ -32,19 +63,32 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
     launchContext: {
       launchOptions: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process',
+          '--no-zygote',
+        ],
       },
     },
     browserPoolOptions: {
       useFingerprints: true,
+      closeInactiveBrowserAfterSecs: 30_000,
     },
     maxRequestRetries: 3,
     requestHandlerTimeoutSecs: 60,
-    navigationTimeoutSecs: 30,
+    navigationTimeoutSecs: 15,
     preNavigationHooks: [
       async (_ctx, goToOptions) => {
         goToOptions.waitUntil = 'networkidle';
         goToOptions.timeout = 30_000;
+      },
+    ],
+    postNavigationHooks: [
+      async (ctx) => {
+        await ctx.page.close();
       },
     ],
     failedRequestHandler: async ({ request, log }) => {
@@ -91,7 +135,11 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
     },
   });
 
-  await crawler.run([sanitizedUrl]);
+  try {
+    await crawler.run([sanitizedUrl]);
+  } finally {
+    await crawler.teardown();
+  }
 
   const dataset = await Dataset.open();
   const { items } = await dataset.getData();

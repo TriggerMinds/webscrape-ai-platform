@@ -1,5 +1,11 @@
 version: '3.8'
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -17,6 +23,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
 
   n8n:
     image: n8nio/n8n:latest
@@ -42,17 +71,12 @@ services:
       - ./n8n-workflows:/backup
     ports:
       - "${N8N_PORT:-5678}:5678"
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
 
   crawlee-api:
     build:
@@ -78,7 +102,48 @@ services:
       NODE_ENV: production
     ports:
       - "${CRAWLEE_PORT:-3001}:3001"
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # Optional: Traefik reverse-proxy for HTTPS
+  # Uncomment and configure your domain + Let's Encrypt email below.
+  #
+  # traefik:
+  #   image: traefik:v3.0
+  #   restart: unless-stopped
+  #   command:
+  #     - "--providers.docker=true"
+  #     - "--providers.docker.exposedbydefault=false"
+  #     - "--entrypoints.websecure.address=:443"
+  #     - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+  #     - "--certificatesresolvers.letsencrypt.acme.email=admin@example.com"
+  #     - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+  #   ports:
+  #     - "443:443"
+  #   volumes:
+  #     - "/var/run/docker.sock:/var/run/docker.sock:ro"
+  #     - "traefik_data:/letsencrypt"
+  #   logging: *default-logging
+  #
+  # To expose n8n and crawlee-api behind Traefik, add labels to each service:
+  #
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.n8n.rule=Host(`n8n.example.com`)"
+  #     - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+  #     - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+  #
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.crawlee.rule=Host(`api.example.com`)"
+  #     - "traefik.http.routers.crawlee.tls.certresolver=letsencrypt"
+  #     - "traefik.http.services.crawlee.loadbalancer.server.port=3001"
 
 volumes:
   postgres_data:
   n8n_data:
+  # traefik_data:

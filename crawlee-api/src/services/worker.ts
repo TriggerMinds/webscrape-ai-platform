@@ -1,6 +1,6 @@
 import { Worker, QueueBaseOptions } from 'bullmq';
 import { ScrapeJobData } from './queue';
-import { scrapeUrl } from './scraper';
+import { scrapeUrl, ProxyUnreachableError } from './scraper';
 
 const connection: QueueBaseOptions['connection'] = {
   host: process.env.REDIS_HOST || '127.0.0.1',
@@ -8,6 +8,20 @@ const connection: QueueBaseOptions['connection'] = {
 };
 
 const concurrency = parseInt(process.env.MAX_CONCURRENCY || '3', 10);
+
+function categorizeError(err: unknown): { statusCode: number; message: string } {
+  if (err instanceof ProxyUnreachableError) {
+    return { statusCode: 502, message: err.message };
+  }
+  const msg = err instanceof Error ? err.message : 'Unknown error';
+  if (
+    msg.toLowerCase().includes('timeout') ||
+    msg.toLowerCase().includes('timed out')
+  ) {
+    return { statusCode: 504, message: 'Request timed out while scraping the URL' };
+  }
+  return { statusCode: 500, message: msg };
+}
 
 export function createWorker(): Worker {
   const worker = new Worker<ScrapeJobData>(
@@ -40,7 +54,8 @@ export function createWorker(): Worker {
   worker.on('failed', async (job, err) => {
     if (!job) return;
     const { webhookUrl, url, userId } = job.data;
-    console.error(`Job ${job.id} (${url}, user ${userId}) failed:`, err.message);
+    const { statusCode, message } = categorizeError(err);
+    console.error(`Job ${job.id} (${url}, user ${userId}) failed [${statusCode}]:`, message);
 
     if (webhookUrl) {
       try {
@@ -51,7 +66,8 @@ export function createWorker(): Worker {
             success: false,
             userId,
             url,
-            error: err.message,
+            error: message,
+            statusCode,
           }),
           signal: AbortSignal.timeout(10_000),
         });
