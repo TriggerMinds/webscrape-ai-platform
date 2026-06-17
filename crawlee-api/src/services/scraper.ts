@@ -1,5 +1,6 @@
 import { PlaywrightCrawler, ProxyConfiguration } from 'crawlee';
 import TurndownService from 'turndown';
+import { logger } from './logger';
 
 const turndownService = new TurndownService({
   headingStyle: 'atx',
@@ -61,7 +62,11 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
   const proxyUrl = process.env.PROXY_URL || '';
 
   if (proxyUrl) {
-    await testProxyConnection(proxyUrl);
+    try {
+      await testProxyConnection(proxyUrl);
+    } catch {
+      logger.warn({ proxyUrl }, 'Proxy unreachable — continuing without proxy check');
+    }
   }
 
   let capturedResult: ScrapeResult | null = null;
@@ -94,11 +99,6 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
       async (_ctx, goToOptions) => {
         goToOptions.waitUntil = 'networkidle';
         goToOptions.timeout = 30_000;
-      },
-    ],
-    postNavigationHooks: [
-      async (ctx) => {
-        await ctx.page.close();
       },
     ],
     failedRequestHandler: async ({ request }) => {
@@ -148,7 +148,11 @@ export async function scrapeUrl(url: string, selectors?: string[]): Promise<Scra
   try {
     await crawler.run([sanitizedUrl]);
   } finally {
-    await crawler.teardown();
+    try {
+      await crawler.teardown();
+    } catch {
+      // crawler.run() handles internal teardown; this is just a safety net
+    }
   }
 
   if (!capturedResult) {

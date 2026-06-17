@@ -17,6 +17,8 @@ COPY --from=build /app/package.json ./
 
 EXPOSE 3001
 
+RUN mkdir -p /app/storage && chown -R pwuser:pwuser /app
+
 USER pwuser
 
 CMD ["node", "dist/index.js"]

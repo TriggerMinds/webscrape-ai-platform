@@ -90,7 +90,7 @@ services:
         condition: service_healthy
     environment:
       PORT: ${CRAWLEE_PORT:-3001}
-      PROXY_URL: ${PROXY_URL:-socks5://127.0.0.1:1080}
+      PROXY_URL: ${PROXY_URL}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       MAX_CONCURRENCY: ${MAX_CONCURRENCY:-3}
